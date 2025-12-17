@@ -1,0 +1,17 @@
+# Python dependencies for MSME Backend APIs
+# Install with: python3 -m pip install -r requirements.txt --break-system-packages
+
+# Core data processing
+numpy>=2.0.0
+pandas>=2.0.0
+
+# AWS/DynamoDB
+boto3>=1.40.0
+
+# Machine Learning
+scikit-learn>=1.3.0
+xgboost>=2.0.0
+
+# String matching
+rapidfuzz>=3.0.0
+
