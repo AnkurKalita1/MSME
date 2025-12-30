@@ -8,6 +8,8 @@ build
 .cache
 .DS_Store
 
+
 node_modules/
 frontend/node_modules/
 backend/node_modules/
+
