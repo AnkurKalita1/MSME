@@ -19,3 +19,6 @@ const QuickActionCard = ({ icon: Icon, label, color, onClick }) => {
 
 export default QuickActionCard;
 
+
+
+

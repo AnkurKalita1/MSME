@@ -12,9 +12,20 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 from typing import List, Dict, Any, Optional, Tuple
+from pathlib import Path
 
 import boto3
 import numpy as np
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+# Look for .env in the backend directory (parent of python directory)
+env_path = Path(__file__).parent.parent / '.env'
+if env_path.exists():
+    load_dotenv(env_path)
+else:
+    # Also try loading from current directory
+    load_dotenv()
 
 # ============================================================
 # spaCy OPTIONAL
@@ -46,18 +57,32 @@ VALID_MATERIALS = [
 # ============================================================
 
 def get_dynamodb_resource():
-    """Get DynamoDB resource"""
+    """Get DynamoDB resource (AWS only)"""
+    # AWS Credentials - Load from .env file or environment variables
+    # Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+    AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+    AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+    AWS_REGION = os.getenv('AWS_REGION', 'ap-south-2')
+    
+    if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY:
+        error_msg = (
+            "AWS credentials not found! Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY "
+            "in your .env file or environment variables."
+        )
+        print(json.dumps({"error": error_msg}), file=sys.stderr)
+        sys.exit(1)
+    
     try:
+        # Always use Real AWS DynamoDB
         dynamodb = boto3.resource(
             "dynamodb",
-            region_name="ap-south-1",
-            endpoint_url="http://localhost:8000",
-            aws_access_key_id="dummy",
-            aws_secret_access_key="dummy",
+            region_name=AWS_REGION,
+            aws_access_key_id=AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
         )
         return dynamodb
     except Exception as e:
-        print(json.dumps({"error": f"Failed to connect to DynamoDB: {str(e)}"}), file=sys.stderr)
+        print(json.dumps({"error": f"Failed to connect to AWS DynamoDB: {str(e)}"}), file=sys.stderr)
         sys.exit(1)
 
 # ============================================================

@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Plus, Package, Loader2, AlertCircle, CheckCircle, X, ChevronDown, ChevronRight, DollarSign, TrendingUp } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Plus, Package, Loader2, AlertCircle, CheckCircle, X, ChevronDown, ChevronRight, DollarSign, TrendingUp, RotateCcw } from 'lucide-react';
 import { bomAPI } from '../services/api';
 
 const BOMGenerator = () => {
@@ -11,8 +11,7 @@ const BOMGenerator = () => {
     category: '',
     item: '',
     quantity: 1,
-    unit: 'Nos',
-    // Optional context fields (aligned with backend schema)
+    unit: 'NOS',
     region: 'central',
     season: 'normal',
     grade: 'standard'
@@ -20,26 +19,54 @@ const BOMGenerator = () => {
   const [expandedItems, setExpandedItems] = useState({});
   const [boqItemsFromStorage, setBoqItemsFromStorage] = useState([]);
   const [selectedBoqIndex, setSelectedBoqIndex] = useState(null);
+  
+  // Material suggestions state
+  const [materialSuggestions, setMaterialSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [availableUnits, setAvailableUnits] = useState(['NOS', 'Sqft', 'Sqm', 'Cft', 'Rft', 'Mtr', 'Kg', 'Ltr', 'Ton', 'Pcs', 'Point']);
+  const suggestionsRef = useRef(null);
+  
+  // Store category per BOQ item
+  const [boqItemCategories, setBoqItemCategories] = useState({});
+  const [boqItemUnits, setBoqItemUnits] = useState({});
 
-  // Load BOQ items from localStorage on mount
+  // Load BOQ items and their saved categories/units from localStorage on mount
   useEffect(() => {
     const saved = localStorage.getItem('boqItems');
+    const savedCategories = localStorage.getItem('boqItemCategories');
+    const savedUnits = localStorage.getItem('boqItemUnits');
+    
     if (saved) {
       try {
         const items = JSON.parse(saved);
         setBoqItemsFromStorage(items);
+        
+        if (savedCategories) {
+          setBoqItemCategories(JSON.parse(savedCategories));
+        }
+        if (savedUnits) {
+          setBoqItemUnits(JSON.parse(savedUnits));
+        }
+        
         // Pre-fill first item if available
         if (items.length > 0) {
+          const firstItem = items[0];
+          const savedCategory = savedCategories ? JSON.parse(savedCategories)[0] : firstItem.category || '';
+          const savedUnit = savedUnits ? JSON.parse(savedUnits)[0] : firstItem.unit || 'NOS';
+          
           setBoqInput({
-            category: items[0].category || '',
-            item: items[0].material || '',
-            quantity: items[0].qty || 1,
-            unit: items[0].unit || 'Nos',
-            region: 'central',
-            season: 'normal',
-            grade: 'standard'
+            category: savedCategory,
+            item: firstItem.material || '',
+            quantity: firstItem.qty || 1,
+            unit: savedUnit,
+            region: firstItem.region || 'central',
+            season: firstItem.season || 'normal',
+            grade: firstItem.grade || 'standard'
           });
           setSelectedBoqIndex(0);
+          
+          // Load material-specific units
+          updateUnitsForMaterial(firstItem.material || '', savedCategory);
         }
       } catch (e) {
         console.error('Failed to load BOQ items:', e);
@@ -47,19 +74,198 @@ const BOMGenerator = () => {
     }
   }, []);
 
+  // Save categories and units to localStorage whenever they change
+  useEffect(() => {
+    if (Object.keys(boqItemCategories).length > 0) {
+      localStorage.setItem('boqItemCategories', JSON.stringify(boqItemCategories));
+    }
+    if (Object.keys(boqItemUnits).length > 0) {
+      localStorage.setItem('boqItemUnits', JSON.stringify(boqItemUnits));
+    }
+  }, [boqItemCategories, boqItemUnits]);
+
+  // Update units based on material and category
+  const updateUnitsForMaterial = async (material, category) => {
+    if (!material && !category) {
+      setAvailableUnits(['NOS', 'Sqft', 'Sqm', 'Cft', 'Rft', 'Mtr', 'Kg', 'Ltr', 'Ton', 'Pcs', 'Point']);
+      return;
+    }
+
+    // Material-specific unit mappings
+    const materialLower = material.toLowerCase();
+    const categoryLower = (category || '').toLowerCase();
+    
+    let units = [];
+    
+    // Check material keywords
+    if (materialLower.includes('wire') || materialLower.includes('cable')) {
+      units = ['Mtr', 'Rft', 'Kg', 'NOS'];
+    } else if (materialLower.includes('conduit') || materialLower.includes('pipe')) {
+      units = ['Mtr', 'Rft', 'NOS'];
+    } else if (materialLower.includes('tile')) {
+      units = ['Sqft', 'Sqm', 'Pcs', 'NOS'];
+    } else if (materialLower.includes('paint') || materialLower.includes('primer')) {
+      units = ['Ltr', 'Kg', 'Sqft'];
+    } else if (materialLower.includes('putty') || materialLower.includes('adhesive') || materialLower.includes('grout')) {
+      units = ['Kg', 'Ltr', 'Sqft'];
+    } else if (materialLower.includes('plywood') || materialLower.includes('laminate')) {
+      units = ['Sqft', 'Sqm', 'Pcs', 'Mtr'];
+    } else if (materialLower.includes('cement')) {
+      units = ['Kg', 'Ton', 'Bag', 'NOS'];
+    } else if (materialLower.includes('sand')) {
+      units = ['Cft', 'Ton', 'Kg'];
+    } else if (materialLower.includes('brick')) {
+      units = ['NOS', 'Pcs', 'Sqft'];
+    } else if (materialLower.includes('steel') || materialLower.includes('rebar')) {
+      units = ['Kg', 'Ton', 'Mtr'];
+    } else {
+      // Category-based defaults
+      if (categoryLower === 'electrical') {
+        units = ['Mtr', 'Rft', 'NOS', 'Pcs', 'Kg'];
+      } else if (categoryLower === 'plumbing') {
+        units = ['Mtr', 'Rft', 'NOS', 'Pcs', 'Kg', 'Ltr'];
+      } else if (categoryLower === 'tiling') {
+        units = ['Sqft', 'Sqm', 'Pcs', 'Kg'];
+      } else if (categoryLower === 'painting') {
+        units = ['Ltr', 'Kg', 'Sqft'];
+      } else if (categoryLower === 'carpentry') {
+        units = ['Sqft', 'Sqm', 'Pcs', 'Mtr', 'Rft'];
+      } else {
+        units = ['NOS', 'Sqft', 'Sqm', 'Mtr', 'Kg', 'Ltr', 'Pcs'];
+      }
+    }
+    
+    setAvailableUnits(units);
+    
+    // Update unit if current unit is not in available units
+    if (boqInput.unit && !units.includes(boqInput.unit)) {
+      setBoqInput({ ...boqInput, unit: units[0] || 'NOS' });
+    }
+  };
+
+  // Fetch material suggestions
+  const fetchMaterialSuggestions = async (category, searchText) => {
+    if (!searchText || searchText.length < 2) {
+      setMaterialSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    try {
+      const response = await bomAPI.getMaterialSuggestions(category, searchText);
+      if (response.success && response.data && response.data.suggestions) {
+        setMaterialSuggestions(response.data.suggestions);
+        setShowSuggestions(true);
+      }
+    } catch (err) {
+      console.error('Error fetching material suggestions:', err);
+    }
+  };
+
   // Handle selecting a BOQ item from the list
   const handleSelectBoqItem = (item, index) => {
+    const savedCategory = boqItemCategories[index] || item.category || '';
+    const savedUnit = boqItemUnits[index] || item.unit || 'NOS';
+    
     setBoqInput({
-      category: item.category || '',
+      category: savedCategory,
       item: item.material || '',
       quantity: item.qty || 1,
-      unit: item.unit || 'Nos',
-      region: 'central',
-      season: 'normal',
-      grade: 'standard'
+      unit: savedUnit,
+      region: item.region || 'central',
+      season: item.season || 'normal',
+      grade: item.grade || 'standard'
     });
     setSelectedBoqIndex(index);
+    
+    // Update units for this material
+    updateUnitsForMaterial(item.material || '', savedCategory);
   };
+
+  // Restore BOQ default values
+  const handleRestoreDefaults = () => {
+    if (selectedBoqIndex !== null && boqItemsFromStorage[selectedBoqIndex]) {
+      const item = boqItemsFromStorage[selectedBoqIndex];
+      setBoqInput({
+        category: item.category || '',
+        item: item.material || '',
+        quantity: item.qty || 1,
+        unit: item.unit || 'NOS',
+        region: item.region || 'central',
+        season: item.season || 'normal',
+        grade: item.grade || 'standard'
+      });
+      updateUnitsForMaterial(item.material || '', item.category || '');
+    }
+  };
+
+  // Handle category change - save per item
+  const handleCategoryChange = (category) => {
+    setBoqInput({ ...boqInput, category });
+    
+    // Save category for current item
+    if (selectedBoqIndex !== null) {
+      setBoqItemCategories({
+        ...boqItemCategories,
+        [selectedBoqIndex]: category
+      });
+    }
+    
+    // Update units based on category
+    updateUnitsForMaterial(boqInput.item, category);
+  };
+
+  // Handle item description change with autocomplete
+  const handleItemChange = (value) => {
+    setBoqInput({ ...boqInput, item: value });
+    
+    // Fetch suggestions
+    fetchMaterialSuggestions(boqInput.category, value);
+    
+    // Update units based on material
+    updateUnitsForMaterial(value, boqInput.category);
+  };
+
+  // Handle unit change - save per item
+  const handleUnitChange = (unit) => {
+    setBoqInput({ ...boqInput, unit });
+    
+    // Save unit for current item
+    if (selectedBoqIndex !== null) {
+      setBoqItemUnits({
+        ...boqItemUnits,
+        [selectedBoqIndex]: unit
+      });
+    }
+  };
+
+  // Handle suggestion selection
+  const handleSuggestionSelect = (suggestion) => {
+    setBoqInput({
+      ...boqInput,
+      item: suggestion.material_name,
+      unit: suggestion.unit || boqInput.unit
+    });
+    setShowSuggestions(false);
+    setMaterialSuggestions([]);
+    
+    // Update units
+    updateUnitsForMaterial(suggestion.material_name, boqInput.category);
+  };
+
+  // Close suggestions when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (suggestionsRef.current && !suggestionsRef.current.contains(event.target)) {
+        setShowSuggestions(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   // Toggle expand/collapse for BOM item
   const toggleExpand = (index) => {
@@ -81,25 +287,6 @@ const BOMGenerator = () => {
     setSuccess(null);
 
     try {
-      // Align payload with backend bom_api.py schema
-      // Backend expects:
-      // {
-      //   "boq": {
-      //     "boq_id": string?,
-      //     "category": string,
-      //     "material": string,
-      //     "quantity": number,
-      //     "unit": string,
-      //     "region": string,
-      //     "season": string,
-      //     "grade": string,
-      //     "dimensions": {...}?,
-      //     "project_context": {...}?
-      //   },
-      //   "wbs": {
-      //     "execution_tasks": [...]
-      //   }
-      // }
       const payload = {
         boq: {
           category: boqInput.category,
@@ -110,7 +297,6 @@ const BOMGenerator = () => {
           season: boqInput.season || 'normal',
           grade: boqInput.grade || 'standard'
         },
-        // We are not yet wiring WBS usage into BOM, so pass empty structure
         wbs: {
           execution_tasks: []
         }
@@ -118,7 +304,6 @@ const BOMGenerator = () => {
 
       const response = await bomAPI.generate(payload);
 
-      // Backend controller wraps python result as: { success: true, data: { ... } }
       if (response.success && response.data) {
         const bomResult = response.data;
         const materials = bomResult.bom_lines || [];
@@ -127,28 +312,32 @@ const BOMGenerator = () => {
           0
         );
 
+        // Create unique BOM with ID
         const newBOM = {
+          id: Date.now() + Math.random(), // Unique ID
           boqItem: boqInput.item,
           category: boqInput.category,
           quantity: boqInput.quantity,
           unit: boqInput.unit,
           materials,
           totalCost,
-          // Use model validation MAPE as a proxy quality indicator (optional)
           wastageFactor: bomResult.wastage_model_val_mape || 0
         };
 
         setBomData([...bomData, newBOM]);
         setSuccess('BOM generated successfully');
-        setBoqInput({
-          category: '',
-          item: '',
-          quantity: 1,
-          unit: 'Nos',
-          region: 'central',
-          season: 'normal',
-          grade: 'standard'
-        });
+        
+        // Save category and unit for current item
+        if (selectedBoqIndex !== null) {
+          setBoqItemCategories({
+            ...boqItemCategories,
+            [selectedBoqIndex]: boqInput.category
+          });
+          setBoqItemUnits({
+            ...boqItemUnits,
+            [selectedBoqIndex]: boqInput.unit
+          });
+        }
       } else {
         setError('Failed to generate BOM. Please try again.');
       }
@@ -171,18 +360,15 @@ const BOMGenerator = () => {
     setSuccess(null);
 
     try {
-      // Align batch payload with backend schema (same shape as single generate)
-      // IMPORTANT: Each item uses its own category (if available), NOT the form's category
-      // This ensures individual items can have different categories
-      const boqs = boqItems.map(item => ({
+      const boqs = boqItems.map((item, index) => ({
         boq: {
-          category: item.category || 'General', // Use item's own category, or default to 'General' (NOT form category)
+          category: boqItemCategories[index] || item.category || 'General',
           material: item.material || item.item || '',
           quantity: item.qty || item.quantity || 1,
-          unit: item.unit || 'Nos',
-          region: item.region || 'central', // Use item's own region, or default
-          season: item.season || 'normal', // Use item's own season, or default
-          grade: item.grade || 'standard' // Use item's own grade, or default
+          unit: boqItemUnits[index] || item.unit || 'NOS',
+          region: item.region || 'central',
+          season: item.season || 'normal',
+          grade: item.grade || 'standard'
         },
         wbs: {
           execution_tasks: []
@@ -191,7 +377,6 @@ const BOMGenerator = () => {
 
       const response = await bomAPI.generateBatch(boqs);
 
-      // Backend returns: { success: true, data: { results: [ { success, data }, ... ] } }
       if (response.success && response.data && Array.isArray(response.data.results)) {
         const results = response.data.results;
 
@@ -205,6 +390,7 @@ const BOMGenerator = () => {
             );
 
             return {
+              id: Date.now() + Math.random() + index, // Unique ID
               boqItem: boqs[index].boq.material,
               category: boqs[index].boq.category,
               quantity: boqs[index].boq.quantity,
@@ -229,19 +415,6 @@ const BOMGenerator = () => {
     }
   };
 
-  // Get material substitutions
-  const handleGetSubstitutions = async (materialName) => {
-    try {
-      const response = await bomAPI.getSubstitutions(materialName);
-      if (response.success && response.data) {
-        // Handle substitutions display
-        console.log('Substitutions:', response.data);
-      }
-    } catch (err) {
-      console.error('Error getting substitutions:', err);
-    }
-  };
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -253,7 +426,19 @@ const BOMGenerator = () => {
 
       {/* Input Form */}
       <div className="bg-white rounded-lg border border-gray-200 p-6">
-        <h2 className="font-semibold text-gray-900 mb-4">Generate BOM from BOQ Item</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-semibold text-gray-900">Generate BOM from BOQ Item</h2>
+          {selectedBoqIndex !== null && (
+            <button
+              onClick={handleRestoreDefaults}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded"
+              title="Restore BOQ default values"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Restore Defaults
+            </button>
+          )}
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -261,33 +446,52 @@ const BOMGenerator = () => {
             </label>
             <select
               value={boqInput.category}
-              onChange={(e) => setBoqInput({ ...boqInput, category: e.target.value })}
+              onChange={(e) => handleCategoryChange(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">Select Category</option>
-              <option value="Interior">Interior</option>
-              <option value="Civil">Civil</option>
               <option value="Electrical">Electrical</option>
               <option value="Plumbing">Plumbing</option>
-              <option value="HVAC">HVAC</option>
-              <option value="Furniture">Furniture</option>
-              <option value="General">General</option>
               <option value="Tiling">Tiling</option>
               <option value="Painting">Painting</option>
               <option value="Carpentry">Carpentry</option>
+              <option value="Civil">Civil</option>
+              <option value="Interior">Interior</option>
+              <option value="HVAC">HVAC</option>
+              <option value="Furniture">Furniture</option>
+              <option value="General">General</option>
             </select>
           </div>
-          <div>
+          <div className="relative" ref={suggestionsRef}>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               BOQ Item Description *
             </label>
             <input
               type="text"
               value={boqInput.item}
-              onChange={(e) => setBoqInput({ ...boqInput, item: e.target.value })}
-              placeholder="e.g., 100 sq ft wooden partition"
+              onChange={(e) => handleItemChange(e.target.value)}
+              onFocus={() => {
+                if (materialSuggestions.length > 0) setShowSuggestions(true);
+              }}
+              placeholder="e.g., Electrical wiring for 3 rooms"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
+            {showSuggestions && materialSuggestions.length > 0 && (
+              <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                {materialSuggestions.map((suggestion, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => handleSuggestionSelect(suggestion)}
+                    className="px-4 py-2 hover:bg-blue-50 cursor-pointer border-b border-gray-100 last:border-b-0"
+                  >
+                    <div className="font-medium text-gray-900">{suggestion.material_name}</div>
+                    {suggestion.unit && (
+                      <div className="text-xs text-gray-500">Unit: {suggestion.unit}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -306,21 +510,12 @@ const BOMGenerator = () => {
             </label>
             <select
               value={boqInput.unit}
-              onChange={(e) => setBoqInput({ ...boqInput, unit: e.target.value })}
+              onChange={(e) => handleUnitChange(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              {/* Common BOQ units aligned with dataset (boq_bom_dataset.csv) */}
-              <option value="Nos">Nos</option>
-              <option value="Sqft">Sqft</option>
-              <option value="Sqm">Sqm</option>
-              <option value="Cft">Cft</option>
-              <option value="Rft">Rft</option>
-              <option value="Mtr">Mtr</option>
-              <option value="Kg">Kg</option>
-              <option value="Ltr">Ltr</option>
-              <option value="Ton">Ton</option>
-              <option value="Pcs">Pcs</option>
-              <option value="Point">Point</option>
+              {availableUnits.map((unit) => (
+                <option key={unit} value={unit}>{unit}</option>
+              ))}
             </select>
           </div>
         </div>
@@ -368,21 +563,48 @@ const BOMGenerator = () => {
         </div>
       </div>
 
+      {/* Success/Error Messages */}
+      {success && (
+        <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg flex items-center justify-between">
+          <div className="flex items-center">
+            <CheckCircle className="w-5 h-5 mr-2" />
+            {success}
+          </div>
+          <button onClick={() => setSuccess(null)}>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg flex items-center justify-between">
+          <div className="flex items-center">
+            <AlertCircle className="w-5 h-5 mr-2" />
+            {error}
+          </div>
+          <button onClick={() => setError(null)}>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* BOQ Items from Storage */}
       {boqItemsFromStorage.length > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <h3 className="font-semibold text-gray-900 mb-2">BOQ Items from Generator ({boqItemsFromStorage.length})</h3>
-          <p className="text-sm text-gray-700 mb-3">
+        <div className="bg-white rounded-lg border border-gray-200 p-6">
+          <h3 className="font-semibold text-gray-900 mb-2">
+            BOQ Items from Generator ({boqItemsFromStorage.length})
+          </h3>
+          <p className="text-sm text-gray-600 mb-4">
             Click on any item below to use it in the form above. You can also generate BOM for all items at once using the button above.
           </p>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {boqItemsFromStorage.map((item, idx) => (
-              <div 
-                key={idx} 
+              <div
+                key={idx}
                 onClick={() => handleSelectBoqItem(item, idx)}
-                className={`bg-white p-3 rounded border-2 cursor-pointer transition-all hover:shadow-md text-sm ${
-                  selectedBoqIndex === idx 
-                    ? 'border-blue-500 bg-blue-50' 
+                className={`p-3 border-2 rounded-lg cursor-pointer transition-colors ${
+                  selectedBoqIndex === idx
+                    ? 'border-blue-500 bg-blue-50'
                     : 'border-blue-100 hover:border-blue-300'
                 }`}
               >
@@ -390,6 +612,11 @@ const BOMGenerator = () => {
                 <div className="text-xs text-gray-600 mt-1">
                   Qty: {item.qty} {item.unit || 'NOS'} | Rate: ₹{item.rate_most_likely || 0}
                 </div>
+                {boqItemCategories[idx] && (
+                  <div className="text-xs text-blue-600 mt-1">
+                    Category: {boqItemCategories[idx]}
+                  </div>
+                )}
                 {selectedBoqIndex === idx && (
                   <div className="text-xs text-blue-600 font-medium mt-1">✓ Selected</div>
                 )}
@@ -399,36 +626,12 @@ const BOMGenerator = () => {
         </div>
       )}
 
-      {/* Error/Success Messages */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
-          <div className="flex-1">
-            <p className="text-sm text-red-800">{error}</p>
-          </div>
-          <button onClick={() => setError(null)}>
-            <X className="w-4 h-4 text-red-600" />
-          </button>
-        </div>
-      )}
-
-      {success && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-start gap-3">
-          <CheckCircle className="w-5 h-5 text-green-600 mt-0.5" />
-          <div className="flex-1">
-            <p className="text-sm text-green-800">{success}</p>
-          </div>
-          <button onClick={() => setSuccess(null)}>
-            <X className="w-4 h-4 text-green-600" />
-          </button>
-        </div>
-      )}
-
-      {/* BOM Results */}
+      {/* Generated BOM Items */}
       {bomData.length > 0 && (
         <div className="space-y-4">
+          <h2 className="text-xl font-bold text-gray-900">Generated BOM Items</h2>
           {bomData.map((bom, index) => (
-            <div key={index} className="bg-white rounded-lg border border-gray-200">
+            <div key={bom.id || index} className="bg-white rounded-lg border border-gray-200">
               <div className="p-4 border-b border-gray-200">
                 <div className="flex items-center justify-between">
                   <div className="flex-1">
@@ -444,7 +647,7 @@ const BOMGenerator = () => {
                       )}
                       {bom.wastageFactor > 0 && (
                         <span className="text-orange-600">
-                          Wastage: {bom.wastageFactor}%
+                          Wastage: {bom.wastageFactor.toFixed(2)}%
                         </span>
                       )}
                     </div>
@@ -464,7 +667,6 @@ const BOMGenerator = () => {
 
               {expandedItems[index] && (
                 <div className="p-4">
-                  {/* Materials Table */}
                   {bom.materials && bom.materials.length > 0 ? (
                     <div className="overflow-x-auto">
                       <table className="w-full">
@@ -490,11 +692,10 @@ const BOMGenerator = () => {
                                 )}
                               </td>
                               <td className="px-4 py-3 text-sm text-gray-600">
-                                {/* final_quantity is the AI-adjusted quantity including wastage */}
                                 {material.final_quantity ?? material.base_quantity ?? 0}
                               </td>
                               <td className="px-4 py-3 text-sm text-gray-600">
-                                {material.unit || 'Nos'}
+                                {material.unit || 'NOS'}
                               </td>
                               <td className="px-4 py-3 text-sm text-gray-600">
                                 ₹{material.unit_rate_inr ?? 0}
@@ -522,25 +723,7 @@ const BOMGenerator = () => {
                       </table>
                     </div>
                   ) : (
-                    <div className="text-center py-8 text-gray-500">
-                      No materials found for this BOQ item
-                    </div>
-                  )}
-
-                  {/* Market Intelligence Section */}
-                  {bom.materials && bom.materials.length > 0 && (
-                    <div className="mt-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
-                      <div className="flex items-start gap-3">
-                        <TrendingUp className="w-5 h-5 text-blue-600 mt-0.5" />
-                        <div className="flex-1">
-                          <h4 className="font-semibold text-gray-900 mb-2">Market Intelligence</h4>
-                          <p className="text-sm text-gray-700">
-                            Rates are based on current market data and historical purchase patterns. 
-                            Consider bulk purchasing for better rates.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
+                    <p className="text-gray-500 text-center py-4">No materials found for this BOM.</p>
                   )}
                 </div>
               )}
@@ -548,16 +731,8 @@ const BOMGenerator = () => {
           ))}
         </div>
       )}
-
-      {bomData.length === 0 && !loading && (
-        <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
-          <Package className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-          <p className="text-gray-600">No BOM generated yet. Enter a BOQ item to generate BOM.</p>
-        </div>
-      )}
     </div>
   );
 };
 
 export default BOMGenerator;
-

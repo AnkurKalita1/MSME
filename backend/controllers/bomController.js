@@ -7,8 +7,9 @@ const PYTHON_SCRIPT = path.join(__dirname, '../python/bom_api.py');
 
 
 /**
- * Get Python executable path with fallback to python3
- * Tries: PYTHON_PATH env var -> python3 -> python
+ * Get Python executable path with fallback to python3/python
+ * Supports both Windows and Unix systems
+ * Tries: PYTHON_PATH env var -> python3 -> python -> python3 (default)
  */
 const getPythonExecutable = () => {
   // Use explicit PYTHON_PATH if set
@@ -16,18 +17,30 @@ const getPythonExecutable = () => {
     return process.env.PYTHON_PATH;
   }
   
-  // Try to find python3 first (common on macOS/Linux)
+  const isWindows = process.platform === 'win32';
+  const findCommand = isWindows ? 'where' : 'which';
+  
+  // Try to find python3 first (common on macOS/Linux, also available on Windows)
   try {
-    execSync('which python3', { stdio: 'ignore' });
+    execSync(`${findCommand} python3`, { stdio: 'ignore' });
     return 'python3';
   } catch (e) {
     // python3 not found, try python
     try {
-      execSync('which python', { stdio: 'ignore' });
+      execSync(`${findCommand} python`, { stdio: 'ignore' });
       return 'python';
     } catch (e2) {
-      // Neither found, default to python3 (most common)
-      return 'python3';
+      // On Windows, also try 'py' launcher
+      if (isWindows) {
+        try {
+          execSync(`${findCommand} py`, { stdio: 'ignore' });
+          return 'py';
+        } catch (e3) {
+          // Fall through to default
+        }
+      }
+      // Neither found, default based on platform
+      return isWindows ? 'python' : 'python3';
     }
   }
 };
@@ -251,6 +264,38 @@ exports.predictWastage = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to predict wastage',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Get material suggestions based on category and search text
+ */
+exports.getMaterialSuggestions = async (req, res) => {
+  try {
+    const { category, search_text } = req.query;
+
+    const queryData = {
+      category: category || '',
+      search_text: search_text || ''
+    };
+
+    const result = await executePythonScript(PYTHON_SCRIPT, [
+      'material-suggestions',
+      JSON.stringify(queryData)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: result
+    });
+
+  } catch (error) {
+    console.error('Error getting material suggestions:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get material suggestions',
       error: error.message
     });
   }

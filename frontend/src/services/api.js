@@ -138,5 +138,52 @@ export const bomAPI = {
       body: JSON.stringify(materialData),
     });
   },
+
+  /**
+   * Get material suggestions based on category and search text
+   * @param {string} category - Category name
+   * @param {string} searchText - Search text
+   */
+  getMaterialSuggestions: async (category, searchText) => {
+    const params = new URLSearchParams();
+    if (category) params.append('category', category);
+    if (searchText) params.append('search_text', searchText);
+    return apiCall(`/api/bom/material-suggestions?${params.toString()}`);
+  },
+};
+
+/**
+ * Predictive API Services
+ */
+export const predictiveAPI = {
+  /**
+   * Make prediction using specific model
+   * @param {string} modelType - Model type: 'delay', 'cost', 'completion', 'profit'
+   * @param {Object} features - Features object with numeric values
+   */
+  predict: async (modelType, features) => {
+    return apiCall('/api/predictive/predict', {
+      method: 'POST',
+      body: JSON.stringify({ model_type: modelType, features }),
+    });
+  },
+
+  /**
+   * Make predictions using all models
+   * @param {Object} features - Features object with numeric values
+   */
+  predictAll: async (features) => {
+    return apiCall('/api/predictive/predict-all', {
+      method: 'POST',
+      body: JSON.stringify({ features }),
+    });
+  },
+
+  /**
+   * Health check
+   */
+  healthCheck: async () => {
+    return apiCall('/api/predictive/health');
+  },
 };
 

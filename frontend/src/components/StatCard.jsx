@@ -22,3 +22,6 @@ const StatCard = ({ title, value, change, icon: Icon, color }) => {
 
 export default StatCard;
 
+
+
+

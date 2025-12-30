@@ -9,10 +9,12 @@ import json
 import os
 import re
 from typing import Dict, Any, List, Optional
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import boto3
+from dotenv import load_dotenv
 from sklearn.model_selection import train_test_split
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
@@ -20,18 +22,41 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_absolute_percentage_error
 
+# Load environment variables from .env file
+# Look for .env in the backend directory (parent of python directory)
+env_path = Path(__file__).parent.parent / '.env'
+if env_path.exists():
+    load_dotenv(env_path)
+else:
+    # Also try loading from current directory
+    load_dotenv()
+
 # ============= DynamoDB Connection =============
+# AWS Credentials - Load from .env file or environment variables
+# Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+AWS_REGION = os.getenv('AWS_REGION', 'ap-south-2')
+
+if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY:
+    raise ValueError(
+        "AWS credentials not found! Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY "
+        "in your .env file or environment variables."
+    )
+
 try:
+    # Always use Real AWS DynamoDB
     dynamodb = boto3.resource(
         'dynamodb',
-        region_name='ap-south-1',
-        endpoint_url='http://localhost:8000',
-        aws_access_key_id='dummy',
-        aws_secret_access_key='dummy'
+        region_name=AWS_REGION,
+        aws_access_key_id=AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=AWS_SECRET_ACCESS_KEY
     )
+    # Test connection
     list(dynamodb.tables.all())
 except Exception as e:
     dynamodb = None
+    print(f"Warning: DynamoDB connection failed: {str(e)}", file=sys.stderr)
 
 # ============= Data Loading Functions =============
 
@@ -220,7 +245,25 @@ def predict_wastage_percent(model: Pipeline, meta: Dict[str, Any],
 
 def get_candidate_materials(category, data, boq_material_text=None):
     MAX_TOTAL = 18
-    category = category.lower()
+    category = str(category).lower().strip() if category else ""
+    
+    # If category is empty or invalid, try to infer from material text
+    if not category or category == "" or category == "general":
+        # Try to infer category from material text
+        text = (boq_material_text or "").lower()
+        if any(k in text for k in ["wire", "cable", "conduit", "junction", "switch", "socket", "electrical"]):
+            category = "electrical"
+        elif any(k in text for k in ["pipe", "elbow", "tee", "valve", "clamp", "solvent", "plumbing"]):
+            category = "plumbing"
+        elif any(k in text for k in ["plywood", "laminate", "edge", "hinge", "handle", "carpentry"]):
+            category = "carpentry"
+        elif any(k in text for k in ["tile", "adhesive", "grout", "spacer", "tiling"]):
+            category = "tiling"
+        elif any(k in text for k in ["paint", "primer", "putty", "painting"]):
+            category = "painting"
+        else:
+            category = "general"  # Default fallback
+    
     cat_map = data["cat_map"].copy()
     
     cat_map = cat_map.rename(columns={
@@ -230,9 +273,14 @@ def get_candidate_materials(category, data, boq_material_text=None):
     
     sub = cat_map[cat_map["category"].str.lower() == category].copy()
     if sub.empty:
-        return pd.DataFrame([{
-            "material_name": category, "unit": "nos", "usage_frequency": 1.0
-        }])
+        # If still empty, return a more helpful default based on category
+        if category == "general":
+            # For general category, try to get materials from all categories
+            sub = cat_map.copy()
+        else:
+            return pd.DataFrame([{
+                "material_name": category, "unit": "nos", "usage_frequency": 1.0
+            }])
     
     sub["usage_frequency"] = pd.to_numeric(
         sub.get("usage_frequency", 1.0), errors="coerce"
@@ -546,11 +594,13 @@ def _generate_bom_for_boq_row(boq_row: pd.Series, data: Dict[str, pd.DataFrame],
                              wbs_usage: Optional[List[Dict[str, Any]]] = None,
                              skill_level: str = "skilled",
                              site_complexity: str = "medium") -> Dict[str, Any]:
-    category = str(boq_row.get("category", ""))
-    region = str(boq_row.get("region", ""))
-    season = str(boq_row.get("season", ""))
-    grade = str(boq_row.get("grade", ""))
-    default_unit = str(boq_row.get("unit", "nos"))
+    category = str(boq_row.get("category", "")).strip()
+    region = str(boq_row.get("region", "")).strip()
+    season = str(boq_row.get("season", "")).strip()
+    grade = str(boq_row.get("grade", "")).strip()
+    # Preserve unit from BOQ, but normalize to lowercase for backend processing
+    boq_unit = str(boq_row.get("unit", "")).strip()
+    default_unit = boq_unit.lower() if boq_unit else "nos"
     work_qty = float(boq_row.get("quantity", 0.0))
     boq_id = str(boq_row.get("boq_id", ""))
     boq_material_text = str(boq_row.get("material", "")).lower()
@@ -828,6 +878,86 @@ def cmd_wastage(material_json: str):
         print(json.dumps({"error": str(e)}), file=sys.stderr)
         sys.exit(1)
 
+def cmd_material_suggestions(query_json: str):
+    """Get material suggestions based on category and search text"""
+    try:
+        query_data = json.loads(query_json)
+        category = query_data.get("category", "").lower().strip()
+        search_text = query_data.get("search_text", "").lower().strip()
+        
+        data, _, _ = initialize_system()
+        cat_map = data["cat_map"].copy()
+        
+        cat_map = cat_map.rename(columns={
+            "material": "material_name", "Material": "material_name",
+            "item": "material_name", "Item": "material_name"
+        })
+        
+        # Filter by category if provided
+        if category and category != "" and category != "general":
+            cat_map = cat_map[cat_map["category"].str.lower() == category].copy()
+        
+        # Filter by search text if provided
+        if search_text:
+            cat_map = cat_map[
+                cat_map["material_name"].str.lower().str.contains(search_text, na=False)
+            ].copy()
+        
+        # Get unique materials with their units
+        suggestions = cat_map[["material_name", "unit"]].drop_duplicates("material_name")
+        suggestions = suggestions.head(50)  # Limit to 50 suggestions
+        
+        result = suggestions.to_dict("records")
+        print(json.dumps({"suggestions": result}, ensure_ascii=False))
+    except Exception as e:
+        print(json.dumps({"error": str(e)}), file=sys.stderr)
+        sys.exit(1)
+
+def get_material_units(material_name: str, category: str, data: Dict[str, pd.DataFrame]) -> List[str]:
+    """Get valid units for a specific material"""
+    material_name_lower = material_name.lower()
+    category_lower = category.lower() if category else ""
+    
+    # Material-specific unit mappings
+    unit_map = {
+        "wire": ["Mtr", "Rft", "Kg"],
+        "cable": ["Mtr", "Rft", "Kg"],
+        "conduit": ["Mtr", "Rft"],
+        "pipe": ["Mtr", "Rft"],
+        "tile": ["Sqft", "Sqm", "Pcs"],
+        "paint": ["Ltr", "Kg"],
+        "primer": ["Ltr", "Kg"],
+        "putty": ["Kg"],
+        "adhesive": ["Kg", "Ltr"],
+        "grout": ["Kg"],
+        "plywood": ["Sqft", "Sqm", "Pcs"],
+        "laminate": ["Sqft", "Sqm"],
+        "cement": ["Kg", "Ton", "Bag"],
+        "sand": ["Cft", "Ton"],
+        "brick": ["Nos", "Pcs"],
+        "steel": ["Kg", "Ton"],
+        "rebar": ["Kg", "Ton", "Mtr"]
+    }
+    
+    # Check for material keywords
+    for key, units in unit_map.items():
+        if key in material_name_lower:
+            return units
+    
+    # Category-based defaults
+    if category_lower == "electrical":
+        return ["Mtr", "Rft", "Nos", "Pcs", "Kg"]
+    elif category_lower == "plumbing":
+        return ["Mtr", "Rft", "Nos", "Pcs", "Kg", "Ltr"]
+    elif category_lower == "tiling":
+        return ["Sqft", "Sqm", "Pcs", "Kg"]
+    elif category_lower == "painting":
+        return ["Ltr", "Kg", "Sqft"]
+    elif category_lower == "carpentry":
+        return ["Sqft", "Sqm", "Pcs", "Mtr", "Rft"]
+    else:
+        return ["NOS", "Sqft", "Sqm", "Mtr", "Kg", "Ltr", "Pcs"]
+
 def main():
     """Main CLI entry point"""
     if len(sys.argv) < 2:
@@ -840,7 +970,8 @@ def main():
         "upload": lambda: cmd_upload(sys.argv[2] if len(sys.argv) > 2 else ""),
         "batch": lambda: cmd_batch(sys.argv[2] if len(sys.argv) > 2 else "[]"),
         "substitutions": lambda: cmd_substitutions(sys.argv[2] if len(sys.argv) > 2 else ""),
-        "wastage": lambda: cmd_wastage(sys.argv[2] if len(sys.argv) > 2 else "{}")
+        "wastage": lambda: cmd_wastage(sys.argv[2] if len(sys.argv) > 2 else "{}"),
+        "material-suggestions": lambda: cmd_material_suggestions(sys.argv[2] if len(sys.argv) > 2 else "{}")
     }
     
     if command not in commands:

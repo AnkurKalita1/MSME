@@ -87,3 +87,6 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen, activeView, setActiveView }) => 
 
 export default Sidebar;
 
+
+
+

@@ -8,11 +8,13 @@ import json
 import uuid
 import warnings
 from typing import List, Dict, Any, Optional
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import boto3
 from decimal import Decimal
+from dotenv import load_dotenv
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import MultiLabelBinarizer, OneHotEncoder
@@ -25,6 +27,15 @@ from sklearn.metrics import mean_absolute_percentage_error
 warnings.filterwarnings("ignore")
 
 # ============= Configuration =============
+# Load environment variables from .env file
+# Look for .env in the backend directory (parent of python directory)
+env_path = Path(__file__).parent.parent / '.env'
+if env_path.exists():
+    load_dotenv(env_path)
+else:
+    # Also try loading from current directory
+    load_dotenv()
+
 # Prevent multiprocessing issues
 import os
 os.environ['LOKY_MAX_CPU_COUNT'] = '1'
@@ -131,21 +142,35 @@ def generate_fixed_stages(n_tasks: int) -> List[int]:
 # ============= DynamoDB Functions =============
 
 def get_dynamodb_resource():
-    """Get DynamoDB resource (local or AWS)"""
+    """Get DynamoDB resource (AWS only)"""
+    # AWS Credentials - Load from .env file or environment variables
+    # Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+    AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+    AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+    AWS_REGION = os.getenv('AWS_REGION', 'ap-south-2')
+    
+    if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY:
+        error_msg = (
+            "AWS credentials not found! Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY "
+            "in your .env file or environment variables."
+        )
+        print(json.dumps({"error": error_msg}), file=sys.stderr)
+        raise ConnectionError(error_msg)
+    
     try:
-        endpoint_url = "http://localhost:8000"
+        # Always use Real AWS DynamoDB
         dynamodb = boto3.resource(
             'dynamodb',
-            endpoint_url=endpoint_url,
-            region_name='ap-south-1',
-            aws_access_key_id='dummy',
-            aws_secret_access_key='dummy'
+            region_name=AWS_REGION,
+            aws_access_key_id=AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=AWS_SECRET_ACCESS_KEY
         )
+        
         # Test connection by trying to list tables (lightweight operation)
         try:
             list(dynamodb.tables.all())
         except Exception as conn_error:
-            raise ConnectionError(f"Could not connect to DynamoDB at {endpoint_url}. Is DynamoDB Local running? Error: {str(conn_error)}")
+            raise ConnectionError(f"Could not connect to AWS DynamoDB in region {AWS_REGION}. Error: {str(conn_error)}")
         return dynamodb
     except Exception as e:
         error_msg = f"Failed to connect to DynamoDB: {str(e)}"
@@ -769,12 +794,11 @@ def cmd_generate_wbs(payload_json: str):
     except ConnectionError as e:
         # Better error message for DynamoDB connection issues
         error_msg = str(e)
-        if "DynamoDB" in error_msg or "localhost:8000" in error_msg:
+        if "DynamoDB" in error_msg:
+            AWS_REGION = os.getenv('AWS_REGION', 'ap-south-2')
             error_msg = (
-                f"Failed to load BOQ data: Could not connect to DynamoDB at http://localhost:8000. "
-                f"Please ensure DynamoDB Local is running. "
-                f"Install with: brew install dynamodb-local (or download from AWS), "
-                f"then start with: dynamodb-local -port 8000"
+                f"Failed to load BOQ data: Could not connect to AWS DynamoDB in region {AWS_REGION}. "
+                f"Please check your AWS credentials in .env file and region configuration."
             )
         print(json.dumps({"error": error_msg}), file=sys.stderr)
         sys.exit(1)
